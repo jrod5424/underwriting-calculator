@@ -164,6 +164,43 @@
   .btn-primary:hover { background: var(--accent2); }
   .btn-secondary { background: white; color: var(--accent); border: 1px solid var(--accent); }
   .btn-secondary:hover { background: #eff6ff; }
+  .btn-pdf { background: #16a34a; color: white; border: none; }
+  .btn-pdf:hover { background: #15803d; }
+
+  /* ======= PRINT / PDF STYLES ======= */
+  @media print {
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    body { background: white !important; font-size: 11px; }
+    .top-header, .kpi-bar, .sidebar, .tab-nav, .btn, #section-sensitivity { display: none !important; }
+    .main-layout { display: block !important; }
+    .content { padding: 0 !important; }
+    #section-property, #section-debt, #section-unitmix, #section-income,
+    #section-expenses, #section-deal { display: none !important; }
+    #section-results, #section-projection { display: block !important; }
+    #returns-lp, #returns-project { display: block !important; }
+    .section { border-radius: 0 !important; margin-bottom: 12px !important; page-break-inside: avoid; }
+    .section-header { background: #0f1c2e !important; color: white !important; padding: 8px 14px !important; }
+    .data-table th { background: #0f1c2e !important; color: white !important; font-size: 9px !important; padding: 5px 6px !important; }
+    .data-table td { font-size: 9px !important; padding: 4px 6px !important; }
+    .data-table tr.total td { background: #0f1c2e !important; color: white !important; }
+    .data-table tr.subtotal td { background: #e8f0f8 !important; }
+    .data-table tr.group-header td { background: #f1f5f9 !important; }
+    .su-grid { grid-template-columns: 1fr 1fr !important; }
+    .waterfall-grid { grid-template-columns: 1fr 1fr !important; }
+    .results-grid { grid-template-columns: repeat(4, 1fr) !important; }
+    #section-projection { page-break-before: always; }
+    .pdf-header { display: block !important; }
+  }
+  .pdf-header { display: none; background: #0f1c2e; color: white; padding: 20px 24px; margin-bottom: 16px; }
+  .pdf-header h2 { font-size: 20px; font-weight: 800; }
+  .pdf-header .pdf-meta { font-size: 12px; color: #94a3b8; margin-top: 4px; display: flex; gap: 24px; }
+  .pdf-kpi-strip { display: none; }
+  @media print {
+    .pdf-kpi-strip { display: flex !important; flex-wrap: wrap; gap: 8px; padding: 12px 0; margin-bottom: 16px; }
+    .pdf-kpi-item { background: #1a3a5c !important; color: white !important; border-radius: 6px; padding: 6px 14px; text-align: center; min-width: 100px; }
+    .pdf-kpi-item .pkl { font-size: 9px; color: #7fa8cc !important; text-transform: uppercase; }
+    .pdf-kpi-item .pkv { font-size: 14px; font-weight: 800; }
+  }
 
   /* TABS */
   .tab-nav { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 20px; }
@@ -209,6 +246,7 @@
   </div>
   <div style="margin-left:auto; display:flex; gap:8px;">
     <button class="btn btn-secondary" onclick="resetDefaults()">Reset Defaults</button>
+    <button class="btn btn-pdf" onclick="downloadPDF()">⬇ Download PDF</button>
     <button class="btn btn-primary" onclick="calculate()">Recalculate ↻</button>
   </div>
 </div>
@@ -491,6 +529,16 @@
 
     <!-- ======================== RESULTS ======================== -->
     <div id="section-results" style="display:none;">
+      <!-- PDF-only header (hidden on screen, shown when printing) -->
+      <div class="pdf-header" id="pdf-header">
+        <h2 id="pdf-prop-title">Multifamily Underwriting Report</h2>
+        <div class="pdf-meta">
+          <span id="pdf-date"></span>
+          <span id="pdf-address"></span>
+          <span id="pdf-units-info"></span>
+        </div>
+      </div>
+      <div class="pdf-kpi-strip" id="pdf-kpi-strip"></div>
       <div class="section">
         <div class="section-header"><span class="num">★</span> Sources & Uses</div>
         <div class="section-body">
@@ -1605,6 +1653,63 @@ function init() {
 
 // Initialize returns tabs
 document.getElementById('returns-project').style.display = 'none';
+
+// ============================================================
+// PDF DOWNLOAD
+// ============================================================
+function downloadPDF() {
+  // Make sure results are calculated and shown
+  if (!lastResults) calculate();
+
+  // Update PDF header fields
+  const propName = document.getElementById('propertyName').value || 'Multifamily Property';
+  const address  = document.getElementById('propertyAddress') ? document.getElementById('propertyAddress').value : '';
+  const units    = document.getElementById('totalUnits').value || '0';
+  const sf       = document.getElementById('avgUnitSF').value || '0';
+  const today    = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+
+  document.getElementById('pdf-prop-title').textContent = propName + ' — Underwriting Report';
+  document.getElementById('pdf-date').textContent       = 'Generated: ' + today;
+  document.getElementById('pdf-address').textContent    = address || '';
+  document.getElementById('pdf-units-info').textContent = units + ' units · ' + sf + ' avg SF';
+
+  // Build KPI strip for PDF
+  const strip = document.getElementById('pdf-kpi-strip');
+  const kpis = [
+    { label: 'Offer Price',   id: 'kpi-offer' },
+    { label: 'Price / Unit',  id: 'kpi-ppu' },
+    { label: 'Cap Rate Yr1',  id: 'kpi-cap' },
+    { label: 'DSCR',          id: 'kpi-dscr' },
+    { label: 'LP CoC',        id: 'kpi-coc' },
+    { label: 'LP AAR',        id: 'kpi-aar' },
+    { label: 'LP IRR',        id: 'kpi-irr' },
+    { label: 'LP EMx',        id: 'kpi-emx' },
+    { label: 'LP Equity',     id: 'kpi-equity' },
+  ];
+  strip.innerHTML = kpis.map(k => {
+    const el = document.getElementById(k.id);
+    const val = el ? el.textContent : '—';
+    const cls = el ? el.className.replace('kpi-value','').trim() : '';
+    const color = cls === 'good' ? '#22c55e' : cls === 'bad' ? '#ef4444' : 'white';
+    return `<div class="pdf-kpi-item">
+      <div class="pkl">${k.label}</div>
+      <div class="pkv" style="color:${color}">${val}</div>
+    </div>`;
+  }).join('');
+
+  // Navigate to results + projection so they're visible when printing
+  const wasOnSection = document.querySelector('[id^="section-"]:not([style*="none"])');
+  showSection('results');
+
+  // Small delay to let DOM render, then print
+  setTimeout(() => {
+    const propTitle = propName.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '-');
+    document.title = propTitle + '-Underwriting-' + new Date().getFullYear();
+    window.print();
+    // Restore title after print
+    setTimeout(() => { document.title = 'Multifamily Underwriting Calculator'; }, 1000);
+  }, 300);
+}
 
 window.addEventListener('DOMContentLoaded', init);
 </script>
