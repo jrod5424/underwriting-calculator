@@ -630,7 +630,9 @@
             </tbody>
             <tfoot>
               <tr class="total-row">
-                <td class="label-cell" colspan="3">Average / Total</td>
+                <td class="label-cell">Avg / Total</td>
+                <td style="text-align:right;font-weight:700;" id="um-avg-beds">0</td>
+                <td style="text-align:right;font-weight:700;" id="um-avg-sf">0</td>
                 <td style="text-align:right;font-weight:700;" id="um-total-units">0</td>
                 <td style="text-align:right;font-weight:700;" id="um-avg-inplace">$0</td>
                 <td style="text-align:right;font-weight:700;" id="um-avg-market">$0</td>
@@ -1195,6 +1197,8 @@ function updateUnitMixTotals() {
   const rows = getUnitMixData();
   const totalUnits = rows.reduce((s, r) => s + r.units, 0);
   const totalRenoUnits = rows.reduce((s, r) => s + r.renoUnits, 0);
+  const avgBeds = totalUnits > 0 ? rows.reduce((s, r) => s + r.beds * r.units, 0) / totalUnits : 0;
+  const avgSF = totalUnits > 0 ? rows.reduce((s, r) => s + r.sf * r.units, 0) / totalUnits : 0;
   const avgInPlace = totalUnits > 0 ? rows.reduce((s, r) => s + r.inPlace * r.units, 0) / totalUnits : 0;
   const avgMarket = totalUnits > 0 ? rows.reduce((s, r) => s + r.market * r.units, 0) / totalUnits : 0;
   const totalRenoCost = rows.reduce((s, r) => s + r.renoCost * r.renoUnits, 0);
@@ -1209,6 +1213,8 @@ function updateUnitMixTotals() {
     // update roi cell
   });
   // Update totals row
+  document.getElementById('um-avg-beds').textContent = avgBeds > 0 ? avgBeds.toFixed(1) : '—';
+  document.getElementById('um-avg-sf').textContent = avgSF > 0 ? Math.round(avgSF).toLocaleString() : '—';
   document.getElementById('um-total-units').textContent = totalUnits;
   document.getElementById('um-avg-inplace').textContent = '$' + Math.round(avgInPlace).toLocaleString();
   document.getElementById('um-avg-market').textContent = '$' + Math.round(avgMarket).toLocaleString();
