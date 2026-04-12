@@ -24,7 +24,10 @@
     --border: #e2e8f0;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--gray1); color: var(--text); font-size: 14px; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--gray1); color: var(--text); font-size: 14px; padding-bottom: 40px; }
+
+  .btn-import { background: #7c3aed; color: white; border: none; }
+  .btn-import:hover { background: #6d28d9; }
 
   /* HEADER */
   .top-header { background: var(--navy); color: white; padding: 14px 24px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
@@ -394,10 +397,60 @@
     #checklist-phases div[style*="background:var(--blue)"] {
       margin-top: 0 !important;
     }
+
+    /* Import modal */
+    #import-overlay > div { margin: 10px !important; padding: 16px !important; }
+    #import-fields-grid { grid-template-columns: 1fr !important; max-height: 300px !important; }
+    #import-dropzone { padding: 20px !important; }
   }
 </style>
+<!-- SheetJS for Excel/CSV parsing -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- PDF.js for PDF text extraction -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Mammoth.js for Word document parsing -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 </head>
 <body>
+
+<!-- IMPORT DOCUMENT MODAL -->
+<div id="import-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:2000;overflow-y:auto;">
+  <div style="background:var(--bg);border-radius:12px;max-width:700px;margin:40px auto;padding:28px;position:relative;border:1px solid var(--border);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+      <div>
+        <div style="font-size:17px;font-weight:700;">📄 Import Document</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">Upload a T12, rent roll, OM, or any property document</div>
+      </div>
+      <button onclick="closeImport()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 12px;cursor:pointer;color:var(--text);font-size:13px;">✕ Close</button>
+    </div>
+
+    <!-- Drop zone -->
+    <div id="import-dropzone" style="border:2px dashed var(--accent);border-radius:10px;padding:32px;text-align:center;cursor:pointer;transition:background 0.2s;margin-bottom:16px;"
+      onclick="document.getElementById('import-file-input').click()"
+      ondragover="event.preventDefault();this.style.background='rgba(59,130,246,0.1)'"
+      ondragleave="this.style.background=''"
+      ondrop="handleFileDrop(event)">
+      <div style="font-size:32px;margin-bottom:8px;">📂</div>
+      <div style="font-weight:600;font-size:14px;margin-bottom:4px;">Click to browse or drag & drop</div>
+      <div style="font-size:12px;color:var(--muted);">Supports: Excel (.xlsx, .xls), CSV, Word (.docx), PDF (text-based)</div>
+      <input type="file" id="import-file-input" style="display:none;" accept=".xlsx,.xls,.csv,.docx,.pdf" onchange="handleFileSelect(event)">
+    </div>
+
+    <!-- Status -->
+    <div id="import-status" style="display:none;margin-bottom:16px;padding:12px;border-radius:8px;font-size:12px;"></div>
+
+    <!-- Extracted values preview -->
+    <div id="import-preview" style="display:none;">
+      <div style="font-weight:700;font-size:14px;margin-bottom:12px;">📋 Extracted Values — Review Before Filling</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:12px;">Green = found in document. Orange = estimated/not found (will use current value). Adjust any values before filling.</div>
+      <div id="import-fields-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;max-height:380px;overflow-y:auto;"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;">
+        <button onclick="closeImport()" style="padding:10px 20px;border:1px solid var(--border);border-radius:6px;background:none;color:var(--text);cursor:pointer;font-size:13px;">Cancel</button>
+        <button onclick="applyImport()" style="padding:10px 24px;background:var(--accent);color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">✅ Fill Calculator</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- TOP HEADER -->
 <div class="top-header">
@@ -407,6 +460,7 @@
     <div class="subtitle">Our Deal Partners · Multifamily Acquisition Tool</div>
   </div>
   <div style="margin-left:auto; display:flex; gap:8px;">
+    <button class="btn btn-import" onclick="openImport()">📄 <span class="hide-mobile">Import </span>Doc</button>
     <button class="btn btn-secondary" onclick="resetDefaults()"><span class="hide-mobile">Reset </span>Defaults</button>
     <button class="btn btn-pdf" onclick="downloadPDF()">⬇ <span class="hide-mobile">Download </span>PDF</button>
     <button class="btn btn-primary" onclick="calculate()"><span class="hide-mobile">Recalculate </span>↻</button>
@@ -3127,6 +3181,364 @@ function resetSmallChecklist() {
   Object.keys(smallDealState).forEach(k => delete smallDealState[k]);
   renderSmallDealChecklist();
 }
+
+// ══════════════════════════════════════════════════
+// DOCUMENT IMPORT FEATURE
+// ══════════════════════════════════════════════════
+
+// Set PDF.js worker
+if (typeof pdfjsLib !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
+let importedValues = {};
+
+function openImport() {
+  document.getElementById('import-overlay').style.display = 'block';
+  document.body.style.overflow = 'hidden';
+  resetImportUI();
+}
+
+function closeImport() {
+  document.getElementById('import-overlay').style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+function resetImportUI() {
+  document.getElementById('import-status').style.display = 'none';
+  document.getElementById('import-preview').style.display = 'none';
+  document.getElementById('import-file-input').value = '';
+  importedValues = {};
+}
+
+function handleFileDrop(e) {
+  e.preventDefault();
+  document.getElementById('import-dropzone').style.background = '';
+  const file = e.dataTransfer.files[0];
+  if (file) processFile(file);
+}
+
+function handleFileSelect(e) {
+  const file = e.target.files[0];
+  if (file) processFile(file);
+}
+
+function showStatus(msg, type) {
+  const el = document.getElementById('import-status');
+  el.style.display = 'block';
+  el.style.background = type === 'error' ? '#fef2f2' : type === 'success' ? '#f0fdf4' : '#eff6ff';
+  el.style.border = '1px solid ' + (type === 'error' ? '#fca5a5' : type === 'success' ? '#86efac' : '#93c5fd');
+  el.style.color = type === 'error' ? '#991b1b' : type === 'success' ? '#166534' : '#1e40af';
+  el.innerHTML = msg;
+}
+
+async function processFile(file) {
+  showStatus('⏳ Reading document...', 'info');
+  document.getElementById('import-preview').style.display = 'none';
+
+  try {
+    const ext = file.name.split('.').pop().toLowerCase();
+    let text = '';
+
+    if (ext === 'xlsx' || ext === 'xls') {
+      text = await readExcel(file);
+    } else if (ext === 'csv') {
+      text = await readText(file);
+    } else if (ext === 'docx') {
+      text = await readDocx(file);
+    } else if (ext === 'pdf') {
+      text = await readPDF(file);
+    } else {
+      showStatus('❌ Unsupported file type. Please use .xlsx, .csv, .docx, or .pdf', 'error');
+      return;
+    }
+
+    if (!text || text.trim().length < 20) {
+      showStatus('⚠️ Could not extract text from this file. If it\'s a scanned document, try our chat for AI-powered extraction.', 'error');
+      return;
+    }
+
+    importedValues = extractFinancials(text);
+    showPreview(importedValues);
+    showStatus('✅ Document read successfully. Review the extracted values below.', 'success');
+
+  } catch (err) {
+    showStatus('❌ Error reading file: ' + err.message + '. Try a different format or paste the data in our chat.', 'error');
+  }
+}
+
+function readText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result);
+    reader.onerror = reject;
+    reader.readAsText(file);
+  });
+}
+
+async function readExcel(file) {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  let allText = '';
+  wb.SheetNames.forEach(name => {
+    const ws = wb.Sheets[name];
+    // Get as CSV text for pattern matching
+    allText += '\n--- Sheet: ' + name + ' ---\n';
+    allText += XLSX.utils.sheet_to_csv(ws, { blankrows: false });
+  });
+  return allText;
+}
+
+async function readDocx(file) {
+  const buf = await file.arrayBuffer();
+  const result = await mammoth.extractRawText({ arrayBuffer: buf });
+  return result.value;
+}
+
+async function readPDF(file) {
+  if (typeof pdfjsLib === 'undefined') {
+    throw new Error('PDF library not loaded yet. Please try again in a moment.');
+  }
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let text = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map(item => item.str).join(' ') + '\n';
+  }
+  return text;
+}
+
+// ── The extraction engine ──
+// Looks for financial keywords near numbers and maps them to calculator fields
+function extractFinancials(text) {
+  const found = {};
+  const lines = text.split(/[\n\r]+/);
+
+  // Helper: find first number near a keyword match
+  function findNum(patterns, multiplier) {
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      for (const pat of patterns) {
+        if (lower.includes(pat)) {
+          // Extract numbers from the line
+          const nums = line.match(/[\$]?\s*[\d,]+(\.\d+)?/g);
+          if (nums && nums.length > 0) {
+            const val = parseFloat(nums[nums.length - 1].replace(/[\$,\s]/g, ''));
+            if (!isNaN(val) && val > 0) {
+              return multiplier ? val * multiplier : val;
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  // Helper: convert annual total to $/unit/month
+  function perUnitMo(annualTotal, units) {
+    if (!annualTotal || !units || units < 1) return null;
+    return Math.round(annualTotal / units / 12);
+  }
+
+  // ── Property basics ──
+  const units = findNum(['total units', 'number of units', '# of units', 'unit count']) ||
+                findNum(['units']) ;
+  if (units) found.totalUnits = { value: units, source: 'found' };
+
+  const askingPrice = findNum(['asking price', 'list price', 'sale price', 'purchase price', 'offer price']);
+  if (askingPrice) found.offerPrice = { value: askingPrice, source: 'found' };
+
+  const yearBuilt = findNum(['year built', 'built in', 'constructed']);
+  if (yearBuilt && yearBuilt > 1900 && yearBuilt < 2030)
+    found.yearBuilt = { value: yearBuilt, source: 'found' };
+
+  const occupancy = findNum(['occupancy', 'occupied', 'physical occupancy', 'current occupancy']);
+  if (occupancy) {
+    found.occupancy = { value: occupancy > 1 ? occupancy : occupancy * 100, source: 'found' };
+  }
+
+  const capRate = findNum(['cap rate', 'capitalization rate', 'going-in cap', 'market cap']);
+  if (capRate) {
+    found.marketCapRate = { value: capRate > 1 ? capRate : capRate * 100, source: 'found' };
+  }
+
+  // ── Annual expenses — convert to $/unit/mo ──
+  const unitCount = found.totalUnits ? found.totalUnits.value : null;
+
+  const taxAnnual = findNum(['property tax', 'real estate tax', 'taxes', 'tax expense']);
+  if (taxAnnual) {
+    const perUm = perUnitMo(taxAnnual, unitCount);
+    if (perUm && perUm > 10 && perUm < 5000) found.expTaxes = { value: perUm, source: 'found', note: `$${taxAnnual.toLocaleString()}/yr ÷ ${unitCount} units ÷ 12` };
+    else if (!unitCount) found.expTaxes = { value: taxAnnual, source: 'found', note: 'Annual total — enter units to auto-convert' };
+  }
+
+  const insAnnual = findNum(['insurance', 'property insurance', 'hazard insurance']);
+  if (insAnnual) {
+    const perUm = perUnitMo(insAnnual, unitCount);
+    if (perUm && perUm > 5 && perUm < 2000) found.expInsurance = { value: perUm, source: 'found', note: `$${insAnnual.toLocaleString()}/yr ÷ ${unitCount} units ÷ 12` };
+  }
+
+  const payrollAnnual = findNum(['payroll', 'salaries', 'wages', 'labor', 'personnel']);
+  if (payrollAnnual) {
+    const perUm = perUnitMo(payrollAnnual, unitCount);
+    if (perUm && perUm > 10 && perUm < 10000) found.expPayroll = { value: perUm, source: 'found', note: `$${payrollAnnual.toLocaleString()}/yr` };
+  }
+
+  const repairsAnnual = findNum(['repairs', 'maintenance', 'repair & maintenance', 'r&m']);
+  if (repairsAnnual) {
+    const perUm = perUnitMo(repairsAnnual, unitCount);
+    if (perUm && perUm > 5 && perUm < 5000) found.expRepairs = { value: perUm, source: 'found', note: `$${repairsAnnual.toLocaleString()}/yr` };
+  }
+
+  const utilitiesAnnual = findNum(['utilities', 'electric', 'water', 'gas', 'sewer', 'trash']);
+  if (utilitiesAnnual) {
+    const perUm = perUnitMo(utilitiesAnnual, unitCount);
+    if (perUm && perUm > 5 && perUm < 5000) found.expUtilities = { value: perUm, source: 'found', note: `$${utilitiesAnnual.toLocaleString()}/yr` };
+  }
+
+  const mgmtFee = findNum(['management fee', 'property management', 'mgmt fee', 'management %']);
+  if (mgmtFee) {
+    // If it looks like a percentage (1-15), use it as %; otherwise try to calculate
+    if (mgmtFee >= 1 && mgmtFee <= 15) found.managementFee = { value: mgmtFee, source: 'found' };
+    else {
+      const perUm = perUnitMo(mgmtFee, unitCount);
+      if (perUm) found._mgmtNote = { value: mgmtFee, source: 'found', note: 'Check if this is % or $ amount' };
+    }
+  }
+
+  const gnaAnnual = findNum(['general & admin', 'general and admin', 'g&a', 'administrative']);
+  if (gnaAnnual) {
+    const perUm = perUnitMo(gnaAnnual, unitCount);
+    if (perUm && perUm < 2000) found.expGnA = { value: perUm, source: 'found' };
+  }
+
+  const advertAnnual = findNum(['advertising', 'marketing', 'leasing']);
+  if (advertAnnual) {
+    const perUm = perUnitMo(advertAnnual, unitCount);
+    if (perUm && perUm < 1000) found.expAdvertising = { value: perUm, source: 'found' };
+  }
+
+  // ── Income ──
+  const gpr = findNum(['gross potential rent', 'gross potential revenue', 'scheduled rent', 'gpr', 'gross rent']);
+  if (gpr) found._gprNote = { value: gpr, source: 'found', note: 'Verify against unit mix' };
+
+  const noi = findNum(['net operating income', 'noi', 'net income']);
+  if (noi) found._noiNote = { value: noi, source: 'found', note: 'For reference — calculated by model' };
+
+  const vacancy = findNum(['vacancy', 'vacancy rate', 'economic vacancy', 'physical vacancy']);
+  if (vacancy) found.generalVacancy = { value: vacancy > 1 ? vacancy : vacancy * 100, source: 'found' };
+
+  // ── Debt ──
+  const ltv = findNum(['loan to value', 'ltv', 'loan-to-value']);
+  if (ltv) found.ltv = { value: ltv > 1 ? ltv : ltv * 100, source: 'found' };
+
+  const rate = findNum(['interest rate', 'note rate', 'coupon rate']);
+  if (rate) found.interestRate = { value: rate > 1 ? rate : rate * 100, source: 'found' };
+
+  const amort = findNum(['amortization', 'amort period', 'amort schedule']);
+  if (amort && amort >= 10 && amort <= 40) found.amortization = { value: amort, source: 'found' };
+
+  return found;
+}
+
+// Field display labels
+const importFieldLabels = {
+  totalUnits: 'Total Units',
+  offerPrice: 'Offer Price ($)',
+  yearBuilt: 'Year Built',
+  occupancy: 'Occupancy (%)',
+  marketCapRate: 'Market Cap Rate (%)',
+  expTaxes: 'Property Taxes ($/unit/mo)',
+  expInsurance: 'Insurance ($/unit/mo)',
+  expPayroll: 'Payroll ($/unit/mo)',
+  expRepairs: 'Repairs ($/unit/mo)',
+  expUtilities: 'Utilities ($/unit/mo)',
+  managementFee: 'Management Fee (%)',
+  expGnA: 'G&A ($/unit/mo)',
+  expAdvertising: 'Advertising ($/unit/mo)',
+  generalVacancy: 'Vacancy (%)',
+  ltv: 'LTV (%)',
+  interestRate: 'Interest Rate (%)',
+  amortization: 'Amortization (years)',
+  _gprNote: 'GPR Found (reference)',
+  _noiNote: 'NOI Found (reference)',
+};
+
+function showPreview(vals) {
+  const grid = document.getElementById('import-fields-grid');
+  let html = '';
+  const keys = Object.keys(importFieldLabels);
+
+  keys.forEach(key => {
+    const item = vals[key];
+    const label = importFieldLabels[key];
+    const isRef = key.startsWith('_');
+    if (item) {
+      html += `<div style="background:${isRef ? '#f8fafc' : '#f0fdf4'};border:1px solid ${isRef ? '#e2e8f0' : '#86efac'};border-radius:6px;padding:10px;">
+        <div style="font-size:10px;color:#64748b;margin-bottom:4px;">${label}</div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:11px;">${isRef ? '📋' : '✅'}</span>
+          ${isRef
+            ? `<span style="font-size:12px;color:#475569;">${item.value.toLocaleString()} <span style="color:#94a3b8;">(reference only)</span></span>`
+            : `<input type="number" id="import_${key}" value="${item.value}" style="width:100%;border:1px solid #86efac;border-radius:4px;padding:4px 6px;font-size:13px;background:white;">`
+          }
+        </div>
+        ${item.note ? `<div style="font-size:10px;color:#64748b;margin-top:3px;">📐 ${item.note}</div>` : ''}
+      </div>`;
+    } else if (!isRef) {
+      html += `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:10px;opacity:0.7;">
+        <div style="font-size:10px;color:#92400e;margin-bottom:4px;">${label}</div>
+        <div style="font-size:11px;color:#b45309;">⚠️ Not found — keeping current value</div>
+      </div>`;
+    }
+  });
+
+  grid.innerHTML = html || '<div style="color:var(--muted);font-size:12px;">No financial data could be extracted from this document. Try our chat for AI-powered extraction.</div>';
+  document.getElementById('import-preview').style.display = 'block';
+}
+
+function applyImport() {
+  const keys = Object.keys(importFieldLabels).filter(k => !k.startsWith('_'));
+  let filled = 0;
+
+  keys.forEach(key => {
+    const input = document.getElementById('import_' + key);
+    if (input && input.value !== '') {
+      const el = document.getElementById(key);
+      if (el) {
+        el.value = parseFloat(input.value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        filled++;
+      }
+    }
+  });
+
+  closeImport();
+  calculate();
+
+  // Show success toast
+  const toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;top:20px;right:20px;background:#16a34a;color:white;padding:12px 20px;border-radius:8px;font-size:13px;z-index:9999;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+  toast.textContent = `✅ ${filled} fields filled from document`;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3500);
+}
+
+// Close modal on backdrop click
+document.getElementById('import-overlay').addEventListener('click', function(e) {
+  if (e.target === this) closeImport();
+});
 </script>
+
+<!-- DISCLAIMER FOOTER -->
+<div style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;border-top:1px solid #1e3a5f;padding:7px 16px;z-index:1000;display:flex;align-items:center;justify-content:center;gap:8px;">
+  <span style="color:#64748b;font-size:10px;text-align:center;line-height:1.4;">
+    ⚠️ <strong style="color:#94a3b8;">Disclaimer:</strong> This tool provides financial analysis only — not investment advice. All projections are estimates based on user inputs. Consult a licensed financial or real estate professional before making any investment decisions. <strong style="color:#94a3b8;">Our Deal Partners</strong> is not liable for decisions made using this tool.
+  </span>
+</div>
+
 </body>
 </html>
