@@ -1,7 +1,7 @@
 // api/rentcast.js — Vercel serverless proxy for Rentcast API
 // Keeps the API key off the client (public HTML) and resolves CORS
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   // Allow only GET
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
